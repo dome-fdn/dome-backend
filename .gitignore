@@ -1,0 +1,8 @@
+node_modules/
+cache/
+.env
+.env.*
+!.env.example
+!.env.sepolia.example
+*.log
+.DS_Store
