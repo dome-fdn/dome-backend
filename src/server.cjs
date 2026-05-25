@@ -71,7 +71,6 @@ async function main() {
         path,
         status: statusCode,
         ms: Date.now() - started,
-        ip: clientIp,
       });
     };
 
