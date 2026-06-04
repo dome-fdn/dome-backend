@@ -78,6 +78,7 @@ function createIndexerService(config, store) {
         levels: Number(levels),
         nextIndex: Number(nextIndex),
         root,
+        updatedAt: new Date().toISOString(),
       };
 
       status = {
@@ -99,6 +100,25 @@ function createIndexerService(config, store) {
 
   async function loadState() {
     return syncToLatest(false);
+  }
+
+  function cachedSummary() {
+    const commitmentCount =
+      cachedState?.commitments?.filter(Boolean).length ?? status.commitmentCount ?? 0;
+    const encryptedOutputCount =
+      cachedState?.encryptedOutputs?.filter(Boolean).length ?? status.encryptedOutputCount ?? 0;
+
+    return {
+      ready: status.ready,
+      root: cachedState?.root ?? null,
+      nextIndex: cachedState?.nextIndex ?? commitmentCount,
+      blockNumber: cachedState?.blockNumber ?? status.lastIndexedBlock ?? config.deploymentBlock,
+      lastIndexedBlock: status.lastIndexedBlock,
+      commitmentCount,
+      encryptedOutputCount,
+      deploymentBlock: config.deploymentBlock,
+      updatedAt: cachedState?.updatedAt ?? null,
+    };
   }
 
   async function getZero(level) {
@@ -148,6 +168,12 @@ function createIndexerService(config, store) {
     if (req.method === "GET" && path === "/merkle/root") {
       const state = await loadState();
       return json(res, 200, { root: state.root, nextIndex: state.nextIndex });
+    }
+
+    if (req.method === "GET" && (path === "/merkle/root/cached" || path === "/stats/summary")) {
+      return json(res, 200, cachedSummary(), {
+        "cache-control": "public, max-age=5, stale-while-revalidate=30",
+      });
     }
 
     if (req.method === "GET" && path === "/get_encrypted") {
