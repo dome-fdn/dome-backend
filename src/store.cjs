@@ -24,6 +24,16 @@ function createSqliteStore(sqlitePath) {
       idx INTEGER PRIMARY KEY,
       output TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS push_devices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      expo_push_token TEXT NOT NULL UNIQUE,
+      platform TEXT NOT NULL,
+      notification_types TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   const getMetaStmt = db.prepare("SELECT value FROM meta WHERE key = ?");
@@ -38,6 +48,27 @@ function createSqliteStore(sqlitePath) {
   );
   const listCommitmentsStmt = db.prepare("SELECT idx, commitment FROM commitments ORDER BY idx ASC");
   const listOutputsStmt = db.prepare("SELECT idx, output FROM encrypted_outputs ORDER BY idx ASC");
+  const upsertPushDeviceStmt = db.prepare(`
+    INSERT INTO push_devices(expo_push_token, platform, notification_types, enabled, created_at, updated_at, last_seen_at)
+    VALUES(@token, @platform, @notificationTypes, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(expo_push_token) DO UPDATE SET
+      platform = excluded.platform,
+      notification_types = excluded.notification_types,
+      enabled = 1,
+      updated_at = CURRENT_TIMESTAMP,
+      last_seen_at = CURRENT_TIMESTAMP
+  `);
+  const listEnabledPushDevicesStmt = db.prepare(`
+    SELECT expo_push_token AS token, platform, notification_types AS notificationTypes
+    FROM push_devices
+    WHERE enabled = 1
+    ORDER BY id ASC
+  `);
+  const disablePushDeviceStmt = db.prepare(`
+    UPDATE push_devices
+    SET enabled = 0, updated_at = CURRENT_TIMESTAMP
+    WHERE expo_push_token = ?
+  `);
   const clearAllStmt = db.transaction(() => {
     db.exec("DELETE FROM meta; DELETE FROM commitments; DELETE FROM encrypted_outputs;");
   });
@@ -74,6 +105,28 @@ function createSqliteStore(sqlitePath) {
     reset() {
       clearAllStmt();
     },
+    upsertPushDevice(device) {
+      upsertPushDeviceStmt.run({
+        token: device.token,
+        platform: device.platform,
+        notificationTypes: JSON.stringify(device.notificationTypes),
+      });
+    },
+    listEnabledPushDevices() {
+      return listEnabledPushDevicesStmt.all().map((row) => ({
+        token: row.token,
+        platform: row.platform,
+        notificationTypes: JSON.parse(row.notificationTypes),
+      }));
+    },
+    disablePushDevices(tokens) {
+      const disable = db.transaction((entries) => {
+        for (const token of entries) {
+          disablePushDeviceStmt.run(token);
+        }
+      });
+      disable(tokens);
+    },
     close() {
       db.close();
     },
@@ -99,6 +152,16 @@ function createPostgresStore(databaseUrl) {
       CREATE TABLE IF NOT EXISTS encrypted_outputs (
         idx INTEGER PRIMARY KEY,
         output TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS push_devices (
+        id BIGSERIAL PRIMARY KEY,
+        expo_push_token TEXT NOT NULL UNIQUE,
+        platform TEXT NOT NULL,
+        notification_types JSONB NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
     ready = true;
@@ -161,6 +224,46 @@ function createPostgresStore(databaseUrl) {
       await pool.query("DELETE FROM commitments");
       await pool.query("DELETE FROM encrypted_outputs");
     },
+    async upsertPushDevice(device) {
+      await ensureSchema();
+      await pool.query(
+        `
+          INSERT INTO push_devices(expo_push_token, platform, notification_types, enabled, created_at, updated_at, last_seen_at)
+          VALUES($1, $2, $3::jsonb, TRUE, NOW(), NOW(), NOW())
+          ON CONFLICT(expo_push_token) DO UPDATE SET
+            platform = excluded.platform,
+            notification_types = excluded.notification_types,
+            enabled = TRUE,
+            updated_at = NOW(),
+            last_seen_at = NOW()
+        `,
+        [device.token, device.platform, JSON.stringify(device.notificationTypes)],
+      );
+    },
+    async listEnabledPushDevices() {
+      await ensureSchema();
+      const result = await pool.query(`
+        SELECT expo_push_token AS token, platform, notification_types AS "notificationTypes"
+        FROM push_devices
+        WHERE enabled = TRUE
+        ORDER BY id ASC
+      `);
+      return result.rows.map((row) => ({
+        token: row.token,
+        platform: row.platform,
+        notificationTypes: Array.isArray(row.notificationTypes)
+          ? row.notificationTypes
+          : JSON.parse(row.notificationTypes),
+      }));
+    },
+    async disablePushDevices(tokens) {
+      await ensureSchema();
+      if (!tokens.length) return;
+      await pool.query(
+        "UPDATE push_devices SET enabled = FALSE, updated_at = NOW() WHERE expo_push_token = ANY($1::text[])",
+        [tokens],
+      );
+    },
     async close() {
       await pool.end();
     },
@@ -197,6 +300,15 @@ function wrapStore(store) {
     },
     async reset() {
       return isAsync ? store.reset() : store.reset();
+    },
+    async upsertPushDevice(device) {
+      return isAsync ? store.upsertPushDevice(device) : store.upsertPushDevice(device);
+    },
+    async listEnabledPushDevices() {
+      return isAsync ? store.listEnabledPushDevices() : store.listEnabledPushDevices();
+    },
+    async disablePushDevices(tokens) {
+      return isAsync ? store.disablePushDevices(tokens) : store.disablePushDevices(tokens);
     },
     async close() {
       return isAsync ? store.close() : store.close();

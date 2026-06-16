@@ -3,6 +3,7 @@ const { buildConfig, validateRuntimeConfig } = require("./config.cjs");
 const { json, text } = require("./http.cjs");
 const { handleRpc, handleDevFund } = require("./rpc.cjs");
 const { createIndexerService } = require("./indexer.cjs");
+const { createNotificationsService } = require("./notifications.cjs");
 const { createStore, ensureStoreIdentity } = require("./store.cjs");
 const { createRateLimiter } = require("./rateLimit.cjs");
 const { info, error, warn } = require("./logger.cjs");
@@ -16,6 +17,7 @@ async function main() {
   await ensureStoreIdentity(store, config);
 
   const indexer = createIndexerService(config, store);
+  const notifications = createNotificationsService(config, store);
   await indexer.syncToLatest(true);
 
   const syncIntervalMs = Number(process.env.DOME_INDEXER_SYNC_MS || 15_000);
@@ -31,6 +33,10 @@ async function main() {
   const relayerLimiter = createRateLimiter({
     windowMs: 60_000,
     max: config.rateLimitRelayerPerMinute,
+  });
+  const pushDeviceLimiter = createRateLimiter({
+    windowMs: 60_000,
+    max: config.rateLimitPushDevicesPerMinute,
   });
 
   async function getHealth() {
@@ -114,6 +120,20 @@ async function main() {
       if (path === "/relayer/withdraw" && !relayerLimiter.allow(clientIp)) {
         finish(429);
         return json(res, 429, { error: "rate limit exceeded" });
+      }
+
+      if (
+        (path === "/v1/devices/register" || path === "/v1/devices/unregister") &&
+        !pushDeviceLimiter.allow(clientIp)
+      ) {
+        finish(429);
+        return json(res, 429, { error: "rate limit exceeded" });
+      }
+
+      const notificationsResult = await notifications.handle(req, res, path);
+      if (notificationsResult !== null) {
+        finish(200);
+        return notificationsResult;
       }
 
       const indexerResult = await indexer.handle(req, res, path, url);

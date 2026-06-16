@@ -51,11 +51,13 @@ function buildConfig() {
     deploymentBlock: Number(deploy.deploymentBlock || 0),
     relayerPrivateKey,
     relayerSecret: process.env.DOME_RELAYER_SECRET || "",
+    notificationsSecret: process.env.DOME_NOTIFICATIONS_SECRET || "",
     localFaucetEnabled: process.env.DOME_DEV_FAUCET !== "false",
     databaseUrl,
     sqlitePath,
     rateLimitRpcPerMinute: Number(process.env.DOME_RATE_LIMIT_RPC_PER_MIN || 240),
     rateLimitRelayerPerMinute: Number(process.env.DOME_RATE_LIMIT_RELAYER_PER_MIN || 20),
+    rateLimitPushDevicesPerMinute: Number(process.env.DOME_RATE_LIMIT_PUSH_DEVICES_PER_MIN || 60),
     logQueryBatchSize: Number(process.env.DOME_LOG_BATCH_SIZE || 10),
   };
 }
