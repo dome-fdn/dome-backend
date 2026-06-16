@@ -102,6 +102,22 @@ function createIndexerService(config, store) {
     return syncToLatest(false);
   }
 
+  function kickBackgroundSync() {
+    if (syncPromise) return;
+    void syncToLatest(false).catch((cause) => {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      info("Background indexer sync failed", { message });
+    });
+  }
+
+  async function readState() {
+    if (cachedState && status.ready) {
+      kickBackgroundSync();
+      return cachedState;
+    }
+    return syncToLatest(false);
+  }
+
   function cachedSummary() {
     const commitmentCount =
       cachedState?.commitments?.filter(Boolean).length ?? status.commitmentCount ?? 0;
@@ -166,7 +182,7 @@ function createIndexerService(config, store) {
     }
 
     if (req.method === "GET" && path === "/merkle/root") {
-      const state = await loadState();
+      const state = await readState();
       return json(res, 200, { root: state.root, nextIndex: state.nextIndex });
     }
 
@@ -177,7 +193,7 @@ function createIndexerService(config, store) {
     }
 
     if (req.method === "GET" && path === "/get_encrypted") {
-      const state = await loadState();
+      const state = await readState();
       const start = Number(url.searchParams.get("start") || 0);
       const end = Number(url.searchParams.get("end") || state.nextIndex);
       const encrypted_outputs = [];
@@ -199,7 +215,7 @@ function createIndexerService(config, store) {
     }
 
     if (req.method === "POST" && (path === "/commitment" || path === "/commitment/")) {
-      const state = await loadState();
+      const state = await readState();
       const body = await readBody(req);
       const target = String(body.commitment || "").toLowerCase();
       const index = state.commitments.findIndex(
@@ -215,7 +231,7 @@ function createIndexerService(config, store) {
     }
 
     if (req.method === "POST" && path === "/check_encrypted_output") {
-      const state = await loadState();
+      const state = await readState();
       const body = await readBody(req);
       const encryptedOutput = String(body.encryptedOutput || "").toLowerCase();
       const exists = state.encryptedOutputs.some(
@@ -253,6 +269,7 @@ function createIndexerService(config, store) {
     relayerAddress: relayer.address,
     getStatus: () => ({ ...status }),
     syncToLatest,
+    kickBackgroundSync,
   };
 }
 

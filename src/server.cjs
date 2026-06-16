@@ -18,6 +18,12 @@ async function main() {
   const indexer = createIndexerService(config, store);
   await indexer.syncToLatest(true);
 
+  const syncIntervalMs = Number(process.env.DOME_INDEXER_SYNC_MS || 15_000);
+  const syncTimer = setInterval(() => {
+    indexer.kickBackgroundSync();
+  }, syncIntervalMs);
+  syncTimer.unref?.();
+
   const rpcLimiter = createRateLimiter({
     windowMs: 60_000,
     max: config.rateLimitRpcPerMinute,
@@ -142,6 +148,7 @@ async function main() {
 
   const shutdown = async (signal) => {
     warn("Shutting down", { signal });
+    clearInterval(syncTimer);
     server.close(async () => {
       await store.close();
       process.exit(0);
