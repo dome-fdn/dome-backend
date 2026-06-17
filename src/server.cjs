@@ -7,6 +7,7 @@ const { json, text } = require("./http.cjs");
 const { handleRpc, handleDevFund } = require("./rpc.cjs");
 const { createIndexerService } = require("./indexer.cjs");
 const { createNotificationsService } = require("./notifications.cjs");
+const { createAdminNotificationsService } = require("./admin-notifications.cjs");
 const { createStore, ensureStoreIdentity } = require("./store.cjs");
 const { createRateLimiter } = require("./rateLimit.cjs");
 const { info, error, warn } = require("./logger.cjs");
@@ -21,6 +22,7 @@ async function main() {
 
   const indexer = createIndexerService(config, store);
   const notifications = createNotificationsService(config, store);
+  const adminNotifications = createAdminNotificationsService(config, store);
   await indexer.syncToLatest(true);
 
   const syncIntervalMs = Number(process.env.DOME_INDEXER_SYNC_MS || 15_000);
@@ -133,6 +135,12 @@ async function main() {
         return json(res, 429, { error: "rate limit exceeded" });
       }
 
+      const adminNotificationsResult = await adminNotifications.handle(req, res, path);
+      if (adminNotificationsResult !== null) {
+        finish(200);
+        return adminNotificationsResult;
+      }
+
       const notificationsResult = await notifications.handle(req, res, path);
       if (notificationsResult !== null) {
         finish(200);
@@ -162,6 +170,7 @@ async function main() {
   server.listen(config.port, config.host, () => {
     info("Dome backend listening", {
       url: `http://${config.host}:${config.port}`,
+      notificationsAdmin: config.notificationsSecret ? `http://${config.host}:${config.port}/admin/notifications` : null,
       rpcUpstream: config.rpcUpstream,
       pool: config.poolAddress,
       relayer: indexer.relayerAddress,

@@ -84,6 +84,69 @@ function buildBroadcastMessage(body) {
   };
 }
 
+async function broadcastNotification(store, body) {
+  const built = buildBroadcastMessage(body);
+  if (built.error) {
+    return { status: 400, body: { error: built.error } };
+  }
+
+  const devices = await store.listEnabledPushDevices();
+  const recipients = devices.filter((device) => device.notificationTypes.includes(built.type));
+  const messages = recipients.map((device) => ({
+    to: device.token,
+    ...built.message,
+  }));
+
+  let sent = 0;
+  let failed = 0;
+  const disabledTokens = [];
+  const ticketIds = [];
+
+  for (const messageBatch of chunk(messages, EXPO_BATCH_SIZE)) {
+    const tickets = await sendExpoBatch(messageBatch);
+    tickets.forEach((ticket, index) => {
+      if (ticket.status === "ok") {
+        sent += 1;
+        if (ticket.id) ticketIds.push(ticket.id);
+        return;
+      }
+
+      failed += 1;
+      const token = messageBatch[index]?.to;
+      const errorCode = ticket.details?.error;
+      warn("Expo push ticket failed", { token, errorCode, message: ticket.message });
+      if (token && errorCode === "DeviceNotRegistered") {
+        disabledTokens.push(token);
+      }
+    });
+  }
+
+  if (disabledTokens.length) {
+    await store.disablePushDevices(disabledTokens);
+  }
+
+  info("Broadcast notification sent", {
+    type: built.type,
+    recipients: recipients.length,
+    sent,
+    failed,
+    disabled: disabledTokens.length,
+  });
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      type: built.type,
+      recipients: recipients.length,
+      sent,
+      failed,
+      disabled: disabledTokens.length,
+      ticketIds,
+    },
+  };
+}
+
 function createNotificationsService(config, store) {
   return {
     async handle(req, res, path) {
@@ -133,63 +196,8 @@ function createNotificationsService(config, store) {
         }
 
         const body = await readBody(req);
-        const built = buildBroadcastMessage(body);
-        if (built.error) {
-          return json(res, 400, { error: built.error });
-        }
-
-        const devices = await store.listEnabledPushDevices();
-        const recipients = devices.filter((device) => device.notificationTypes.includes(built.type));
-        const messages = recipients.map((device) => ({
-          to: device.token,
-          ...built.message,
-        }));
-
-        let sent = 0;
-        let failed = 0;
-        const disabledTokens = [];
-        const ticketIds = [];
-
-        for (const messageBatch of chunk(messages, EXPO_BATCH_SIZE)) {
-          const tickets = await sendExpoBatch(messageBatch);
-          tickets.forEach((ticket, index) => {
-            if (ticket.status === "ok") {
-              sent += 1;
-              if (ticket.id) ticketIds.push(ticket.id);
-              return;
-            }
-
-            failed += 1;
-            const token = messageBatch[index]?.to;
-            const errorCode = ticket.details?.error;
-            warn("Expo push ticket failed", { token, errorCode, message: ticket.message });
-            if (token && errorCode === "DeviceNotRegistered") {
-              disabledTokens.push(token);
-            }
-          });
-        }
-
-        if (disabledTokens.length) {
-          await store.disablePushDevices(disabledTokens);
-        }
-
-        info("Broadcast notification sent", {
-          type: built.type,
-          recipients: recipients.length,
-          sent,
-          failed,
-          disabled: disabledTokens.length,
-        });
-
-        return json(res, 200, {
-          ok: true,
-          type: built.type,
-          recipients: recipients.length,
-          sent,
-          failed,
-          disabled: disabledTokens.length,
-          ticketIds,
-        });
+        const result = await broadcastNotification(store, body);
+        return json(res, result.status, result.body);
       }
 
       return null;
@@ -199,5 +207,6 @@ function createNotificationsService(config, store) {
 
 module.exports = {
   IMPORTANT_INFORMATION,
+  broadcastNotification,
   createNotificationsService,
 };
