@@ -1,3 +1,6 @@
+const { loadBackendEnv } = require("./load-env.cjs");
+loadBackendEnv();
+
 const http = require("node:http");
 const { buildConfig, validateRuntimeConfig } = require("./config.cjs");
 const { json, text } = require("./http.cjs");
